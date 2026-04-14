@@ -35,7 +35,6 @@
         .fade-in { animation: fadeIn 0.6s ease-out; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         
-        /* 针对嵌入窗口优化 */
         .app-container {
             width: 100%;
             max-width: 500px;
@@ -59,12 +58,18 @@
         import { getFirestore, collection, addDoc, getDocs, query, orderBy, limit, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 
-        // 基础配置
-        const firebaseConfig = JSON.parse(__firebase_config);
-        const app = initializeApp(firebaseConfig);
-        const db = getFirestore(app);
-        const auth = getAuth(app);
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'lion-city-adventure';
+        // GitHub Pages 兼容性处理：检查环境变量是否存在
+        let db, auth, appId;
+        const hasFirebase = typeof __firebase_config !== 'undefined';
+        
+        if (hasFirebase) {
+            const firebaseConfig = JSON.parse(__firebase_config);
+            const app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+            appId = typeof __app_id !== 'undefined' ? __app_id : 'lion-city-adventure';
+        }
+
         const apiKey = ""; // 运行时自动提供
 
         // 核心数据
@@ -99,19 +104,24 @@
         // --- 核心逻辑 ---
 
         async function initAuth() {
-            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                await signInWithCustomToken(auth, __initial_auth_token);
-            } else {
-                await signInAnonymously(auth);
-            }
+            if (!hasFirebase) return;
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch(e) { console.warn("Auth failed, continuing in guest mode"); }
         }
 
-        onAuthStateChanged(auth, (user) => {
-            if (user) state.user.uid = user.uid;
-        });
+        if (hasFirebase) {
+            onAuthStateChanged(auth, (user) => {
+                if (user) state.user.uid = user.uid;
+            });
+        }
 
         async function saveScore() {
-            if (!auth.currentUser) return;
+            if (!hasFirebase || !auth.currentUser) return;
             const now = new Date();
             const dateStr = `${now.getMonth() + 1}/${now.getDate()} ${now.getHours()}:${now.getMinutes().toString().padStart(2, '0')}`;
             try {
@@ -127,6 +137,7 @@
         }
 
         function fetchLeaderboard() {
+            if (!hasFirebase) return;
             const colRef = collection(db, 'artifacts', appId, 'public', 'data', 'leaderboard');
             onSnapshot(colRef, (snapshot) => {
                 const data = [];
@@ -137,6 +148,9 @@
         }
 
         async function generateImage(prompt) {
+            // 如果是在 GitHub Pages 环境且没有 API Key，使用预设图片
+            if (!apiKey) return "https://images.unsplash.com/photo-1518998053901-5348d3961a04?auto=format&fit=crop&w=800&q=80";
+            
             try {
                 const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey}`, {
                     method: 'POST',
@@ -228,7 +242,7 @@
                             </p>
                         </div>
 
-                        ${isWin ? `
+                        ${isWin && hasFirebase ? `
                         <div class="space-y-3 mt-4">
                             <div class="flex justify-between items-center px-1">
                                 <h3 class="font-bold text-slate-800">📜 侦探英雄榜</h3>
@@ -278,7 +292,7 @@
             state.view = 'loading';
             render();
             
-            await initAuth();
+            if (hasFirebase) await initAuth();
             state.galleryImg = await generateImage("Grand entrance of a classic art gallery, sunny day, vibrant trees");
             state.view = 'gallery';
             render();
@@ -382,8 +396,10 @@
             const val = document.getElementById('final-code').value.trim();
             if (val === CORRECT_ANSWER) {
                 state.result = 'Win';
-                await saveScore();
-                fetchLeaderboard();
+                if (hasFirebase) {
+                    await saveScore();
+                    fetchLeaderboard();
+                }
             } else {
                 state.result = 'Lose';
             }
